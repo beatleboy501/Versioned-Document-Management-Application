@@ -1,0 +1,10 @@
+{
+  "accountId": "",
+  "clientId": "",
+  "region": "us-east-1",
+  "userPoolId": "us-east-",
+  "identityPoolId": "us-east-1:",
+  "redirectUri": "http://localhost:3000",
+  "authDomain": "document-managment",
+  "apiEndpoint": "http://localhost:3000"
+}

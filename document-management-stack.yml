@@ -1,0 +1,384 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+  pPrefix:
+    Type: String
+    Default: DocumentManagment
+  pUserPoolName:
+    Type: String
+    Default: DocumentManagementUserPool
+  pBucketParamName:
+    Type: String
+    Default: BucketParam
+  pKeyAlias:
+    Type: String
+    Default: alias/document-management-app/keys/document-management
+  pCognitoAuthRoleName:
+    Type: String
+    Default: CognitoAuthRole
+  pCognitoUserPoolDomainPrefix:
+    Type: String
+    Default: document-management
+
+Resources:
+  rCognitoUserPool:
+    Type: 'AWS::Cognito::UserPool'
+    Properties:
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_phone_number
+            Priority: 1
+          - Name: verified_email
+            Priority: 2
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+        InviteMessageTemplate:
+          EmailMessage: >-
+            Hello {username}, you have been invited to join the Document
+            Management App! Your temporary password is {####}
+          EmailSubject: Invitation to join the Document Management App
+      AutoVerifiedAttributes:
+        - email
+      EmailVerificationMessage: 'The verification code to your new account is {####}'
+      EmailVerificationSubject: Verify your new account
+      Schema:
+        - Mutable: true
+          Name: name
+          Required: true
+        - Mutable: true
+          Name: phone_number
+          Required: false
+        - AttributeDataType: DateTime
+          Name: joinedOn
+      SmsVerificationMessage: 'The verification code to your new account is {####}'
+      UsernameAttributes:
+        - email
+      UserPoolName: !Ref pUserPoolName
+      VerificationMessageTemplate:
+        DefaultEmailOption: CONFIRM_WITH_CODE
+        EmailMessage: 'The verification code to your new account is {####}'
+        EmailSubject: Verify your new account
+        SmsMessage: 'The verification code to your new account is {####}'
+
+  rUserPoolCognitoDomain:
+    Type: 'AWS::Cognito::UserPoolDomain'
+    Properties:
+      Domain: !Ref pCognitoUserPoolDomainPrefix
+      UserPoolId: !Ref rCognitoUserPool
+
+  rUserPoolIdParam:
+    Type: 'AWS::SSM::Parameter'
+    Properties:
+      Type: String
+      Value: !Ref rCognitoUserPool
+      Name: /document-management-app/cognito/user-pool-id
+      Tags:
+        Project: !Ref pPrefix
+    
+  rUserPoolClient:
+    Type: 'AWS::Cognito::UserPoolClient'
+    Properties:
+      UserPoolId: !Ref rCognitoUserPool
+      AllowedOAuthFlows:
+        - implicit
+        - code
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes:
+        - profile
+        - phone
+        - email
+        - openid
+        - aws.cognito.signin.user.admin
+      CallbackURLs:
+        - 'http://localhost:1234'
+        - 'http://localhost:3000'
+      PreventUserExistenceErrors: ENABLED
+      SupportedIdentityProviders:
+        - COGNITO
+
+  rUserPoolClientIdParam:
+    Type: 'AWS::SSM::Parameter'
+    Properties:
+      Type: String
+      Value: !Ref rCognitoUserPool
+      Name: /document-management-app/cognito/user-pool-client-id
+      Tags:
+        Project: !Ref pPrefix
+
+  rUserPoolDomainParam:
+    Type: 'AWS::SSM::Parameter'
+    Properties:
+      Type: String
+      Value: !Ref rUserPoolCognitoDomain
+      Name: /document-management-app/cognito/user-pool-domain
+      Tags:
+        Project: !Ref pPrefix
+    
+  rIdentityPool:
+    Type: 'AWS::Cognito::IdentityPool'
+    Properties:
+      AllowUnauthenticatedIdentities: false
+      CognitoIdentityProviders:
+        - ClientId: !Ref rUserPoolClient
+          ProviderName: !GetAtt 
+            - rCognitoUserPool
+            - ProviderName
+      IdentityPoolName: document-management-app-idp
+
+  rIdentityPoolIdParam:
+    Type: 'AWS::SSM::Parameter'
+    Properties:
+      Type: String
+      Value: !Ref rIdentityPool
+      Name: /document-management-app/cognito/identity-pool-id
+      Tags:
+        Project: !Ref pPrefix
+
+  rAuthenticatedRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: pCognitoAuthRoleName
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: 'sts:AssumeRoleWithWebIdentity'
+            Condition:
+              StringEquals:
+                'cognito-identity.amazonaws.com:aud': !Ref rIdentityPool
+            Effect: Allow
+            Principal:
+              Federated: cognito-identity.amazonaws.com
+        Version: 2012-10-17
+      Tags:
+        - Key: Project
+          Value: !Ref pPrefix
+
+  rAuthenticatedRoleArn:
+    Type: 'AWS::SSM::Parameter'
+    Properties:
+      Type: String
+      Value: !GetAtt 
+        - rAuthenticatedRole
+        - Arn
+      Name: /document-management-app/cognito/authenticated-role-arn
+      Tags:
+        Project: !Ref pPrefix
+
+  rAuthenticatedRoleAttachement:
+    Type: 'AWS::Cognito::IdentityPoolRoleAttachment'
+    Properties:
+      IdentityPoolId: !Ref rIdentityPool
+      Roles:
+        authenticated: !GetAtt 
+          - rAuthenticatedRole
+          - Arn        
+
+  rDocumentManagementKmsKey:
+    Type: 'AWS::KMS::Key'
+    Properties: 
+      KeyPolicy:
+        Statement:
+          - Action:
+              - 'kms:Create*'
+              - 'kms:Describe*'
+              - 'kms:Enable*'
+              - 'kms:List*'
+              - 'kms:Put*'
+              - 'kms:Update*'
+              - 'kms:Revoke*'
+              - 'kms:Disable*'
+              - 'kms:Get*'
+              - 'kms:Delete*'
+              - 'kms:ScheduleKeyDeletion'
+              - 'kms:CancelKeyDeletion'
+              - 'kms:GenerateDataKey'
+              - 'kms:TagResource'
+              - 'kms:UntagResource'
+            Effect: Allow
+            Principal:
+              AWS: !Join 
+                - ''
+                - - 'arn:'
+                  - !Ref 'AWS::Partition'
+                  - ':iam::'
+                  - !Ref 'AWS::AccountId'
+                  - ':root'
+            Resource: '*'
+          - Action: 'kms:*'
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt
+                - rAuthenticatedRole
+                - Arn
+            Resource:
+              - !Join 
+                - ''
+                - - 'arn:aws:kms:*:'
+                  - !Ref 'AWS::AccountId'
+                  - ':'
+                  - !Ref pKeyAlias
+              - !Join 
+                - ''
+                - - 'arn:aws:kms:*:'
+                  - !Ref 'AWS::AccountId'
+                  - ':key/*'
+        Version: 2012-10-17
+      EnableKeyRotation: true
+      Tags:
+        - Key: Project
+          Value: !Ref pPrefix
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+
+  rDocumentManagementKeyAlias:
+    Type: 'AWS::KMS::Alias'
+    Properties:
+      AliasName: !Ref pKeyAlias
+      TargetKeyId: !GetAtt 
+        - rDocumentManagementKmsKey
+        - Arn
+
+  rDocumentManagementBucket: 
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      AccessControl: Private
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: 'aws:kms'
+              KMSMasterKeyID: !GetAtt
+                - rDocumentManagementKmsKey
+                - Arn
+      CorsConfiguration:
+        CorsRules:
+          - AllowedMethods:
+              - POST
+              - GET
+              - PUT
+              - DELETE
+            AllowedOrigins:
+              - '*'
+            ExposedHeaders:
+              - ETag
+              - x-amz-version-id
+              - VersionId
+            AllowedHeaders:
+              - '*'
+      LifecycleConfiguration:
+        Rules:
+          - Status: Enabled
+            Transitions:
+              - StorageClass: STANDARD_IA
+                TransitionInDays: 60
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Project
+          Value: !Ref pPrefix
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Retain
+
+  rDocumentManagementBucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref rDocumentManagementBucket
+      PolicyDocument:
+        Statement:
+          - Action: 's3:*'
+            Condition:
+              StringNotEquals:
+                'aws:PrincipalAccount': !Ref 'AWS::AccountId'
+                'aws:RequestedRegion': !Ref 'AWS::Region'
+            Effect: Deny
+            Principal: '*'
+            Resource:
+              - !Join 
+                - ''
+                - - 'arn:aws:s3:::'
+                  - !Ref rDocumentManagementBucket
+              - !Join 
+                - ''
+                - - 'arn:aws:s3:::'
+                  - !Ref rDocumentManagementBucket
+                  - /*
+          - Action:
+              - 's3:Put*'
+              - 's3:Get*'
+              - 's3:List*'
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt
+                - rAuthenticatedRole
+                - Arn
+            Resource:
+              - !GetAtt 
+                - rDocumentManagementBucket
+                - Arn
+              - !Join 
+                - ''
+                - - !GetAtt 
+                    - rDocumentManagementBucket
+                    - Arn
+                  - /*
+        Version: 2012-10-17
+
+  rDocumentManagementBucketParam:
+    Type: 'AWS::SSM::Parameter'
+    Properties:
+      Type: String
+      Value: !Ref rDocumentManagementBucket
+      Name: /document-management-app/s3-bucket
+      Tags:
+        Project: !Ref pPrefix
+
+  rCognitoAuthRoleImportedPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action:
+              - 'kms:List*'
+              - 'kms:Create*'
+              - 'kms:Encrypt*'
+              - 'kms:Decrypt*'
+              - 'kms:Generate*'
+            Effect: Allow
+            Resource:
+              - !GetAtt 
+                - rDocumentManagementKmsKey
+                - Arn
+              - !Join 
+                - ''
+                - - 'arn:aws:kms:*:'
+                  - !Ref 'AWS::AccountId'
+                  - ':'
+                  - !Ref pKeyAlias
+          - Action:
+              - 's3:Put*'
+              - 's3:Delete*'
+              - 's3:Get*'
+              - 's3:List*'
+            Effect: Allow
+            Resource:
+              - !GetAtt 
+                - rDocumentManagementBucket
+                - Arn
+              - !Join 
+                - ''
+                - - !GetAtt 
+                    - rDocumentManagementBucket
+                    - Arn
+                  - /*
+        Version: 2012-10-17
+      PolicyName: DocumentManagmentCognitoAuthRolePolicy
+      Roles:
+        - !Select 
+          - 1
+          - !Split 
+            - /
+            - !Select 
+              - 5
+              - !Split 
+                - ':'
+                - !GetAtt
+                  - rAuthenticatedRole
+                  - Arn
