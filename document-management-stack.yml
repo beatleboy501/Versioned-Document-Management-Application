@@ -1,6 +1,9 @@
 AWSTemplateFormatVersion: 2010-09-09
 
 Parameters:
+  pNamePrefix:
+    Type: String
+    Default: apr21
   pPrefix:
     Type: String
     Default: DocumentManagment
@@ -63,7 +66,7 @@ Resources:
   rUserPoolCognitoDomain:
     Type: 'AWS::Cognito::UserPoolDomain'
     Properties:
-      Domain: !Ref pCognitoUserPoolDomainPrefix
+      Domain: !Sub "${pNamePrefix}${pCognitoUserPoolDomainPrefix}"
       UserPoolId: !Ref rCognitoUserPool
 
   rUserPoolIdParam:
@@ -137,7 +140,7 @@ Resources:
   rAuthenticatedRole:
     Type: 'AWS::IAM::Role'
     Properties:
-      RoleName: pCognitoAuthRoleName
+      RoleName: !Sub "${pNamePrefix}${pCognitoAuthRoleName}"
       AssumeRolePolicyDocument:
         Statement:
           - Action: 'sts:AssumeRoleWithWebIdentity'
@@ -382,3 +385,246 @@ Resources:
                 - !GetAtt
                   - rAuthenticatedRole
                   - Arn
+
+  rDynamoDBAttachmentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+
+  rDynamoDBVersionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: versionId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: versionId
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+
+  rDynamoDBRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Principal:
+              Service:
+                - appsync.amazonaws.com
+      Policies:
+        - PolicyName: DDBAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource: !GetAtt rDynamoDBAttachmentsTable.Arn
+        - PolicyName: DDBAccessB
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource: !GetAtt rDynamoDBVersionsTable.Arn
+
+  rAppSyncApi:
+    Type: AWS::AppSync::GraphQLApi
+    Properties:
+      Name: AttachmentsApi
+      AuthenticationType: AMAZON_COGNITO_USER_POOLS
+      UserPoolConfig:
+        UserPoolId: !Ref rCognitoUserPool
+        AwsRegion: !Ref AWS::Region
+        DefaultAction: ALLOW
+
+  rAppSyncSchema:
+    Type: AWS::AppSync::GraphQLSchema
+    Properties:
+      ApiId: !GetAtt rAppSyncApi.ApiId
+      Definition: |
+        type Attachment {
+          id: ID!
+          name: String
+          type: String
+          url: String
+        }
+        type PaginatedAttachments {
+          attachments: [Attachment!]!
+          nextToken: String
+        }
+        type Version {
+          versionId: String,
+          lastModified: String,
+          attachmentId: String
+          url: String
+        }
+        type Query {
+          allAttachments(limit: Int, nextToken: String): PaginatedAttachments!
+          getAttachment(id: ID!): Attachment
+        }
+        type Mutation {
+          createAttachment(id: ID!, name: String, type: String, url: String, lastModified: String): Attachment
+          createAttachmentVersion(versionId: ID!, attachmentId: String, url: String, lastModified: String): Version
+          deleteAttachment(id: ID!): Attachment
+        }
+        type Schema {
+          query: Query
+          mutation: Mutation
+        }
+
+  rAppSyncAttachmentsTableDataSource:
+    Type: AWS::AppSync::DataSource
+    Properties:
+      Name: AttachmentsDataSource
+      ApiId: !GetAtt rAppSyncApi.ApiId
+      Description: "The Attachments Table AppSync Data Source"
+      Type: AMAZON_DYNAMODB
+      ServiceRoleArn: !GetAtt rDynamoDBRole.Arn
+      DynamoDBConfig:
+        TableName: !Ref rDynamoDBAttachmentsTable
+        AwsRegion: !Sub ${AWS::Region}
+
+  rAppSyncVersionsTableDataSource:
+    Type: AWS::AppSync::DataSource
+    Properties:
+      Name: VersionsDataSource
+      ApiId: !GetAtt rAppSyncApi.ApiId
+      Description: "The Versions Table AppSync Data Source"
+      Type: AMAZON_DYNAMODB
+      ServiceRoleArn: !GetAtt rDynamoDBRole.Arn
+      DynamoDBConfig:
+        TableName: !Ref rDynamoDBVersionsTable
+        AwsRegion: !Sub ${AWS::Region}
+
+  rAppSyncAllAttachmentsQueryResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: rAppSyncSchema
+    Properties:
+      ApiId: !GetAtt rAppSyncApi.ApiId
+      TypeName: Query
+      FieldName: allAttachments
+      DataSourceName: !GetAtt rAppSyncAttachmentsTableDataSource.Name
+      RequestMappingTemplate: |
+        {
+          "version": "2017-02-28",
+          "operation": "Scan",
+          "limit": $util.defaultIfNull(${ctx.args.limit},20),
+          "nextToken": $util.toJson(${ctx.args.nextToken})
+        }
+      ResponseMappingTemplate: |
+        {
+          "attachments": $util.toJson($ctx.result.items),
+          "nextToken": $util.toJson(${ctx.args.nextToken})
+        }
+
+  rAppSyncGetAttachmentQueryResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: rAppSyncSchema
+    Properties:
+      ApiId: !GetAtt rAppSyncApi.ApiId
+      TypeName: Query
+      FieldName: getAttachment
+      DataSourceName: !GetAtt rAppSyncAttachmentsTableDataSource.Name
+      RequestMappingTemplate: |
+        {
+          "version": "2018-05-29",
+          "operation": "GetItem",
+          "key": {
+            "id": $util.dynamodb.toDynamoDBJson($ctx.args.id)
+          }
+        }
+      ResponseMappingTemplate: "$util.toJson($ctx.result)"
+
+  rAppSyncCreateAttachmentMutationResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: rAppSyncSchema
+    Properties:
+      ApiId: !GetAtt rAppSyncApi.ApiId
+      TypeName: Mutation
+      FieldName: createAttachment
+      DataSourceName: !GetAtt rAppSyncAttachmentsTableDataSource.Name
+      RequestMappingTemplate: |
+        {
+          "version": "2018-05-29",
+          "operation": "PutItem",
+          "key": {
+            "id": $util.dynamodb.toDynamoDBJson($ctx.args.id)
+          },
+          "attributeValues": {
+            "name": $util.dynamodb.toDynamoDBJson($ctx.args.name),
+            "type": $util.dynamodb.toDynamoDBJson($ctx.args.type),
+            "url": $util.dynamodb.toDynamoDBJson($ctx.args.url)
+          }
+        }
+      ResponseMappingTemplate: "$util.toJson($ctx.result)"
+
+  rAppSyncCreateAttachmentVersionMutationResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: rAppSyncSchema
+    Properties:
+      ApiId: !GetAtt rAppSyncApi.ApiId
+      TypeName: Mutation
+      FieldName: createAttachmentVersion
+      DataSourceName: !GetAtt rAppSyncVersionsTableDataSource.Name
+      RequestMappingTemplate: |
+        {
+          "version": "2018-05-29",
+          "operation": "PutItem",
+          "key": {
+            "versionId": $util.dynamodb.toDynamoDBJson($ctx.args.versionId)
+          },
+          "attributeValues": {
+            "attachmentId": $util.dynamodb.toDynamoDBJson($ctx.args.attachmentId),
+            "lastModified": $util.dynamodb.toDynamoDBJson($ctx.args.lastModified),
+            "url": $util.dynamodb.toDynamoDBJson($ctx.args.url),
+          }
+        }
+      ResponseMappingTemplate: "$util.toJson($ctx.result)"
+
+  rAppSyncDeleteAttachmentMutationResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: rAppSyncSchema
+    Properties:
+      ApiId: !GetAtt rAppSyncApi.ApiId
+      TypeName: Mutation
+      FieldName: deleteAttachment
+      DataSourceName: !GetAtt rAppSyncAttachmentsTableDataSource.Name
+      RequestMappingTemplate: |
+        {
+          "version": "2018-05-29",
+          "operation": "DeleteItem",
+          "key": {
+            "id": $util.dynamodb.toDynamoDBJson($ctx.args.id)
+          }
+        }
+      ResponseMappingTemplate: "$util.toJson($ctx.result)"
+
+Outputs:
+  oGraphQLApiEndpoint:
+    Description: The URL to the GraphQL Endpoint
+    Value: !GetAtt rAppSyncApi.GraphQLUrl

@@ -38,8 +38,9 @@ const useStyles = makeStyles((theme: { spacing: (arg0: number) => any; }) => ({
 }));
 
 const getBaseS3Url = (filename: string) => {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { documentAttachmentBucketName, region } = config;
-  return `https://${documentAttachmentBucketName}.s3.${region}.amazonaws.com/${filename}`;
+  return `https://${documentAttachmentBucketName}.s3.amazonaws.com/${filename}`;
 };
 
 const FileUploadButton = ({ onUpload }: ButtonProps) => {
@@ -63,15 +64,16 @@ const FileUploadButton = ({ onUpload }: ButtonProps) => {
             await ctx.defaultCredentialProvider()
               .then(async (credentials) => {
                 const filename = encodeURIComponent(file.name);
-                const result = await uploadToS3({
+                const { result, key } = await uploadToS3({
                   bucket: config.documentAttachmentBucketName,
                   region: config.region,
                   fileUploadData,
                   filename,
                   credentials,
+                  prefix: credentials.identityId,
                 });
                 const versionId = result.VersionId;
-                const url = getBaseS3Url(filename);
+                const url = getBaseS3Url(key.split('/').map(encodeURIComponent).join('/'));
                 if (versionId) {
                   onUpload(url, versionId, file.name);
                   setFile(undefined);

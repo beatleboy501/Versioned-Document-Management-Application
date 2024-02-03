@@ -1,7 +1,8 @@
 import React, { useContext, useEffect, useState } from 'react';
 import { Link, TableCell, TableRow, Typography } from '@material-ui/core';
 import generateSignedUrl from '../../generateSignedUrl';
-import { AuthContext, AuthContextProps } from '../Auth';
+import { AuthContext } from '../Auth';
+import { AuthContextProps } from '../../types/AuthContextProps';
 import { ExpandableProps } from '../../types/Props';
 import config from '../../s3-config.json';
 

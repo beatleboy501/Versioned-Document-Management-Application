@@ -50,7 +50,8 @@ export default function Row({ row }: RowProps) {
         )
         .then(setBaseUrl);
     })();
-  }, [ctx, row.url]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [row.url]);
 
   return (
     <>
