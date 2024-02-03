@@ -45,46 +45,38 @@ function Main() {
         onSuccess: (a: unknown) => void,
     ) => ctx.graphql(createVersionQuery(variables))(onError, onSuccess);
 
-    const createVersion = (match: AttachmentType, fileName: string, newVersion: VersionType, newAttachments: AttachmentType[]) => {
+    const createVersion = (originalAttachment: AttachmentType, fileName: string, newVersion: VersionType, existingAttachments: AttachmentType[]) => {
         const onError = (versionError: any) => {
-            if (!match) onOpenToast('Could not create a new version, original attachment not found');
+            if (!originalAttachment) onOpenToast('Could not create a new version, original attachment not found');
             else onOpenToast(`Could not create a new version of attachment: ${fileName}. Error: ${versionError}`);
         };
         const onSuccess = () => {
-            match.versions?.push(newVersion);
-            newAttachments[newAttachments.findIndex((a: AttachmentType) => a.id === match.id)] = match;
-            setAttachments(newAttachments);
+            originalAttachment.versions?.push(newVersion);
+            existingAttachments[existingAttachments.findIndex((a: AttachmentType) => a.id === originalAttachment.id)] = originalAttachment;
+            setAttachments(existingAttachments);
         };
-        createNewVersionInDynamo({ ...newVersion, attachmentId: match.id }, onError, onSuccess);
+        createNewVersionInDynamo({ ...newVersion, attachmentId: originalAttachment.id }, onError, onSuccess);
     };
 
     const handleUpload = (url: string, versionId: string, fileName: string): void => {
-        const newVersion: VersionType = { 
-            versionId, 
-            lastModified: new Date(Date.now()).toString(), 
+        const newVersion: VersionType = {
+            versionId,
+            lastModified: new Date(Date.now()).toString(),
             url,
         };
-        const newAttachments = attachments.slice();
+        const updatedAttachments = attachments.slice();
         const match: AttachmentType | undefined = attachments.find(({ name }) => name === fileName);
         if (match) { // add to an existing doc's versions
-            createVersion(match, fileName, newVersion, newAttachments);
+            createVersion(match, fileName, newVersion, updatedAttachments);
         } else { // create a new doc
             const onError = (attachmentError: any) => {
                 onOpenToast(`Could not save attachment: ${fileName}. Error: ${attachmentError}`);
             };
             const onSuccess = () => {
-                newAttachments.push(newAttachment);
-                const onVersionSuccess = () => {
-                    newAttachment.versions?.push(newVersion);
-                    newAttachments[newAttachments.findIndex((a: AttachmentType) => a.id === newAttachment.id)] = newAttachment;
-                    setAttachments(newAttachments);
-                };
-                const onVersionError = (err: any) => {
-                    onOpenToast(`Could not create a new version of attachment: ${fileName}`);
-                }
-                createNewVersionInDynamo({ ...newVersion, attachmentId: newAttachment.id }, onVersionError, onVersionSuccess);
+                updatedAttachments.push(attachment);
+                createVersion(attachment, fileName, newVersion, updatedAttachments);
             };
-            const newAttachment: AttachmentType = {
+            const attachment: AttachmentType = {
                 id: versionId,
                 name: fileName,
                 type: fileName.split(".")[fileName.split(".").length - 1],
@@ -92,8 +84,7 @@ function Main() {
                 url,
                 lastModified: new Date(Date.now()).toString(),
             };
-            console.log('Creating new attachment')
-            createNewAttachmentInDynamo(newAttachment, onError, onSuccess);
+            createNewAttachmentInDynamo(attachment, onError, onSuccess);
         }
     };
 
